@@ -8,3 +8,5 @@ aho-corasick = "1.1.5"
 libc = "0.2.189"
 nix = { version = "0.31.3", features = ["term", "poll", "signal", "process", "fs", "ioctl", "hostname"] }
 regex = "1.13.1"
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.1.5"
