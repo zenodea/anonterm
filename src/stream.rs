@@ -66,9 +66,52 @@ impl Anonymizer {
     }
 
     fn finish_seq(&mut self, breaks: bool, out: &mut Vec<u8>) {
-        let seq = std::mem::take(&mut self.seq);
+        let mut seq = std::mem::take(&mut self.seq);
         self.state = State::Ground;
+        if seq.get(1) == Some(&b']') {
+            seq = self.rewrite_osc(seq);
+        }
         self.push_raw(&seq, breaks, out);
+    }
+
+    fn rewrite_osc(&mut self, seq: Vec<u8>) -> Vec<u8> {
+        let Ok(text) = std::str::from_utf8(&seq) else { return seq };
+        let body = &text[2..];
+        let Some((num, rest)) = body.split_once(';') else { return seq };
+        let skip = match num {
+            "0" | "1" | "2" | "7" => 0,
+            "8" => match rest.find(';') {
+                Some(i) => i + 1,
+                None => return seq,
+            },
+            _ => return seq,
+        };
+        let tail = if rest.ends_with("\x1b\\") { 2 } else { 1 };
+        let start = 2 + num.len() + 1 + skip;
+        let end = text.len() - tail;
+        if start > end {
+            return seq;
+        }
+        match self.rewrite(&text[start..end]) {
+            Some(r) => [&text[..start], &r, &text[end..]].concat().into_bytes(),
+            None => seq,
+        }
+    }
+
+    fn rewrite(&mut self, text: &str) -> Option<String> {
+        let spans = self.rules.find(text);
+        if spans.is_empty() {
+            return None;
+        }
+        let mut r = String::with_capacity(text.len());
+        let mut pos = 0;
+        for sp in spans {
+            r.push_str(&text[pos..sp.start]);
+            r.push_str(&self.pseudo.replace(&text[sp.start..sp.end], sp.kind));
+            pos = sp.end;
+        }
+        r.push_str(&text[pos..]);
+        Some(r)
     }
 
     fn flush_into(&mut self, out: &mut Vec<u8>) {
@@ -85,21 +128,7 @@ impl Anonymizer {
                 joined.extend_from_slice(t);
             }
         }
-        let replaced = std::str::from_utf8(&joined).ok().and_then(|text| {
-            let spans = self.rules.find(text);
-            if spans.is_empty() {
-                return None;
-            }
-            let mut r = String::with_capacity(text.len());
-            let mut pos = 0;
-            for sp in spans {
-                r.push_str(&text[pos..sp.start]);
-                r.push_str(&self.pseudo.replace(&text[sp.start..sp.end], sp.kind));
-                pos = sp.end;
-            }
-            r.push_str(&text[pos..]);
-            Some(r)
-        });
+        let replaced = std::str::from_utf8(&joined).ok().and_then(|text| self.rewrite(text));
 
         let Some(replaced) = replaced else {
             for s in segs {
@@ -270,6 +299,24 @@ mod tests {
         let mut f = filter(&["nobody"]);
         let input: &[u8] = b"\x1b[?1049h\x1b[H\x1b[2J\x1b]0;title\x07abc\x1b[K\r\n\x1bP$qm\x1b\\\x1b(B\x1b[1 qxyz\x1b[?25l";
         assert_eq!(run(&mut f, &[input]), input);
+    }
+
+    #[test]
+    fn window_title_and_cwd_are_masked() {
+        let mut f = filter(&["somebody"]);
+        let fake = fake("somebody");
+        let out = run(&mut f, &[b"\x1b]2;somebody@host: ~\x07\x1b]7;file://host/home/somebody\x1b\\\x1b]52;c;c29tZWJvZHk=\x07"]);
+        let want = format!("\x1b]2;{fake}@host: ~\x07\x1b]7;file://host/home/{fake}\x1b\\\x1b]52;c;c29tZWJvZHk=\x07");
+        assert_eq!(out, want.as_bytes());
+    }
+
+    #[test]
+    fn hyperlink_uri_is_masked_but_params_kept() {
+        let mut f = filter(&["somebody"]);
+        let fake = fake("somebody");
+        let out = run(&mut f, &[b"\x1b]8;id=somebody;https://somebody.example\x1b\\x\x1b]8;;\x1b\\"]);
+        let want = format!("\x1b]8;id=somebody;https://{fake}.example\x1b\\x\x1b]8;;\x1b\\");
+        assert_eq!(out, want.as_bytes());
     }
 
     #[test]

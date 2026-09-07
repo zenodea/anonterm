@@ -21,6 +21,8 @@ By default:
 - `user.name` and `user.email` from your global git config
 - `Host`, `HostName` and `User` values from `~/.ssh/config`
 - email addresses, IPv4 and IPv6 addresses, MAC addresses
+- window titles, working-directory reports and hyperlink targets set by
+  the shell (OSC 0, 1, 2, 7, 8)
 - common secret formats: AWS access keys, GitHub and Slack tokens,
   `sk-` API keys, JWTs, `Bearer` tokens
 
