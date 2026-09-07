@@ -37,6 +37,7 @@ pub struct Pseudonymizer {
 }
 
 impl Pseudonymizer {
+    #[cfg(test)]
     pub fn new(seed: u64) -> Self {
         Self::with_style(seed, Style::Pseudonym)
     }

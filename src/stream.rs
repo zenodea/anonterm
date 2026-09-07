@@ -4,6 +4,7 @@ use crate::rules::RuleSet;
 
 const MAX_SEQ: usize = 4096;
 const MAX_TEXT: usize = 16 * 1024;
+const MAX_HELD: usize = 32 * 1024;
 
 enum Seg {
     Text(Vec<u8>),
@@ -27,11 +28,20 @@ pub struct Anonymizer {
     text_len: usize,
     state: State,
     seq: Vec<u8>,
+    held: Vec<u8>,
 }
 
 impl Anonymizer {
     pub fn new(rules: RuleSet, pseudo: Pseudonymizer) -> Self {
-        Self { rules, pseudo, segs: Vec::new(), text_len: 0, state: State::Ground, seq: Vec::new() }
+        Self {
+            rules,
+            pseudo,
+            segs: Vec::new(),
+            text_len: 0,
+            state: State::Ground,
+            seq: Vec::new(),
+            held: Vec::new(),
+        }
     }
 
     fn push_text(&mut self, b: u8, out: &mut Vec<u8>) {
@@ -180,13 +190,14 @@ fn esc_breaks(fin: u8) -> bool {
     matches!(fin, b'7' | b'8' | b'D' | b'E' | b'H' | b'M' | b'c')
 }
 
-impl Filter for Anonymizer {
-    fn feed(&mut self, input: &[u8], out: &mut Vec<u8>) {
+impl Anonymizer {
+    fn scan(&mut self, input: &[u8]) {
+        let mut out = std::mem::take(&mut self.held);
         for &b in input {
             if self.state != State::Ground {
                 self.seq.push(b);
                 if self.seq.len() > MAX_SEQ {
-                    self.finish_seq(false, out);
+                    self.finish_seq(false, &mut out);
                     continue;
                 }
             }
@@ -196,51 +207,63 @@ impl Filter for Anonymizer {
                         self.seq.push(b);
                         self.state = State::Esc;
                     } else if b < 0x20 || b == 0x7f {
-                        self.push_raw(&[b], c0_breaks(b), out);
+                        self.push_raw(&[b], c0_breaks(b), &mut out);
                     } else {
-                        self.push_text(b, out);
+                        self.push_text(b, &mut out);
                     }
                 }
                 State::Esc => match b {
                     b'[' => self.state = State::Csi,
                     b']' | b'P' | b'X' | b'^' | b'_' => self.state = State::Str,
                     0x20..=0x2f => self.state = State::EscInter,
-                    0x30..=0x7e => self.finish_seq(esc_breaks(b), out),
+                    0x30..=0x7e => self.finish_seq(esc_breaks(b), &mut out),
                     0x1b => {
                         self.seq.pop();
                         let stray = std::mem::replace(&mut self.seq, vec![0x1b]);
-                        self.push_raw(&stray, false, out);
+                        self.push_raw(&stray, false, &mut out);
                     }
-                    _ => self.finish_seq(c0_breaks(b), out),
+                    _ => self.finish_seq(c0_breaks(b), &mut out),
                 },
                 State::EscInter => match b {
                     0x20..=0x2f => {}
-                    _ => self.finish_seq(false, out),
+                    _ => self.finish_seq(false, &mut out),
                 },
                 State::Csi => match b {
                     0x40..=0x7e => {
                         let breaks = csi_breaks(&self.seq);
-                        self.finish_seq(breaks, out);
+                        self.finish_seq(breaks, &mut out);
                     }
                     0x20..=0x3f => {}
-                    _ => self.finish_seq(true, out),
+                    _ => self.finish_seq(true, &mut out),
                 },
                 State::Str => match b {
-                    0x07 => self.finish_seq(false, out),
+                    0x07 => self.finish_seq(false, &mut out),
                     0x1b => self.state = State::StrEsc,
                     _ => {}
                 },
                 State::StrEsc => match b {
-                    b'\\' => self.finish_seq(false, out),
+                    b'\\' => self.finish_seq(false, &mut out),
                     0x1b => {}
                     _ => self.state = State::Str,
                 },
             }
         }
+        self.held = out;
+    }
+}
+
+impl Filter for Anonymizer {
+    fn feed(&mut self, input: &[u8], out: &mut Vec<u8>) {
+        self.scan(input);
+        if self.text_len == 0 || self.held.len() >= MAX_HELD {
+            out.append(&mut self.held);
+        }
     }
 
     fn flush(&mut self, out: &mut Vec<u8>) {
-        self.flush_into(out);
+        let mut held = std::mem::take(&mut self.held);
+        self.flush_into(&mut held);
+        out.append(&mut held);
     }
 
     fn pending(&self) -> bool {
@@ -317,6 +340,24 @@ mod tests {
         let out = run(&mut f, &[b"\x1b]8;id=somebody;https://somebody.example\x1b\\x\x1b]8;;\x1b\\"]);
         let want = format!("\x1b]8;id=somebody;https://{fake}.example\x1b\\x\x1b]8;;\x1b\\");
         assert_eq!(out, want.as_bytes());
+    }
+
+    #[test]
+    fn redraw_prefix_waits_for_pending_text() {
+        let mut f = filter(&["somebody"]);
+        let mut out = Vec::new();
+        f.feed(b"\r\x1b[K$ echo hi", &mut out);
+        assert!(out.is_empty());
+        f.flush(&mut out);
+        assert_eq!(out, b"\r\x1b[K$ echo hi");
+    }
+
+    #[test]
+    fn complete_lines_are_not_delayed() {
+        let mut f = filter(&["somebody"]);
+        let mut out = Vec::new();
+        f.feed(b"\r\x1b[Kdone\r\n", &mut out);
+        assert_eq!(out, b"\r\x1b[Kdone\r\n");
     }
 
     #[test]
