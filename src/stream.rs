@@ -94,7 +94,7 @@ impl Anonymizer {
             let mut pos = 0;
             for sp in spans {
                 r.push_str(&text[pos..sp.start]);
-                r.push_str(&self.pseudo.replace(&text[sp.start..sp.end]));
+                r.push_str(&self.pseudo.replace(&text[sp.start..sp.end], sp.kind));
                 pos = sp.end;
             }
             r.push_str(&text[pos..]);
@@ -222,7 +222,7 @@ impl Filter for Anonymizer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::Literals;
+    use crate::rules::{Kind, Literals};
 
     fn filter(words: &[&str]) -> Anonymizer {
         let mut rules = RuleSet::new();
@@ -240,7 +240,7 @@ mod tests {
     }
 
     fn fake(word: &str) -> String {
-        Pseudonymizer::new(42).replace(word)
+        Pseudonymizer::new(42).replace(word, Kind::Word)
     }
 
     #[test]

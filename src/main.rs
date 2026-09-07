@@ -38,6 +38,7 @@ fn main() {
 
     let mut rules = rules::RuleSet::new();
     rules.push(rules::Literals::new(&literals));
+    rules.push(rules::Patterns::builtin());
     let mut filter = stream::Anonymizer::new(rules, pseudo::Pseudonymizer::from_env());
     match pty::run(&args, &mut filter) {
         Ok(code) => process::exit(code),

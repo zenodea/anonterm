@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use crate::rules::Kind;
+
 fn fnv1a(seed: u64, s: &str) -> u64 {
     let mut h = 0xcbf2_9ce4_8422_2325u64 ^ seed;
     for b in s.bytes() {
@@ -19,6 +21,8 @@ fn splitmix(state: &mut u64) -> u64 {
 
 const VOWELS: &[u8] = b"aeiou";
 const CONSONANTS: &[u8] = b"bdfgklmnprstvz";
+const HEX: &[u8] = b"abcdef";
+const ALNUM: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
 
 pub struct Pseudonymizer {
     seed: u64,
@@ -38,16 +42,16 @@ impl Pseudonymizer {
         Self::new(seed)
     }
 
-    pub fn replace(&mut self, original: &str) -> String {
+    pub fn replace(&mut self, original: &str, kind: Kind) -> String {
         if let Some(r) = self.cache.get(original) {
             return r.clone();
         }
-        let r = self.generate(original);
+        let r = self.generate(original, kind);
         self.cache.insert(original.to_string(), r.clone());
         r
     }
 
-    fn generate(&self, original: &str) -> String {
+    fn generate(&self, original: &str, kind: Kind) -> String {
         let mut rng = fnv1a(self.seed, original);
         let mut out = String::with_capacity(original.len());
         let mut want_vowel = splitmix(&mut rng) & 1 == 0;
@@ -55,7 +59,12 @@ impl Pseudonymizer {
             let r = splitmix(&mut rng);
             let pick = |set: &[u8]| set[(r % set.len() as u64) as usize] as char;
             if c.is_alphabetic() {
-                let letter = if want_vowel { pick(VOWELS) } else { pick(CONSONANTS) };
+                let letter = match kind {
+                    Kind::Hex => pick(HEX),
+                    Kind::Token => pick(ALNUM),
+                    Kind::Word if want_vowel => pick(VOWELS),
+                    Kind::Word => pick(CONSONANTS),
+                };
                 want_vowel = !want_vowel;
                 out.push(if c.is_uppercase() { letter.to_ascii_uppercase() } else { letter });
             } else if c.is_ascii_digit() {
@@ -85,7 +94,7 @@ mod tests {
     #[test]
     fn preserves_shape() {
         let mut p = Pseudonymizer::new(1);
-        let r = p.replace("Some.Body@example.org");
+        let r = p.replace("Some.Body@example.org", Kind::Word);
         assert_eq!(r.chars().count(), "Some.Body@example.org".chars().count());
         assert_eq!(r.as_bytes()[4], b'.');
         assert_eq!(r.as_bytes()[9], b'@');
@@ -99,14 +108,14 @@ mod tests {
         let mut a = Pseudonymizer::new(7);
         let mut b = Pseudonymizer::new(7);
         let mut c = Pseudonymizer::new(8);
-        assert_eq!(a.replace("somebody"), b.replace("somebody"));
-        assert_ne!(a.replace("somebody"), c.replace("somebody"));
+        assert_eq!(a.replace("somebody", Kind::Word), b.replace("somebody", Kind::Word));
+        assert_ne!(a.replace("somebody", Kind::Word), c.replace("somebody", Kind::Word));
     }
 
     #[test]
     fn digits_stay_digits() {
         let mut p = Pseudonymizer::new(3);
-        let r = p.replace("192.168.1.42");
+        let r = p.replace("192.168.1.42", Kind::Word);
         assert!(r.chars().all(|c| c.is_ascii_digit() || c == '.'));
         assert_eq!(r.len(), 12);
     }
