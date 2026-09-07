@@ -10,3 +10,10 @@ nix = { version = "0.31.3", features = ["term", "poll", "signal", "process", "fs
 regex = "1.13.1"
 serde = { version = "1.0.229", features = ["derive"] }
 toml = "1.1.5"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
