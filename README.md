@@ -13,6 +13,19 @@ anonterm --list               # show what would be masked
 Anything that runs in a terminal runs inside anonterm: nvim, htop, tmux,
 ssh. Keystrokes are forwarded untouched. Only the program output is filtered.
 
+<table>
+  <tr>
+    <th>Before</th>
+    <th><code>anonterm</code></th>
+    <th><code>anonterm -m</code></th>
+  </tr>
+  <tr>
+    <td><img src="docs/before.png" alt="prompt showing the real user and host"></td>
+    <td><img src="docs/after.png" alt="prompt with user and host replaced by pseudonyms"></td>
+    <td><img src="docs/mask.png" alt="prompt with user and host replaced by asterisks"></td>
+  </tr>
+</table>
+
 ## What gets masked
 
 By default:
