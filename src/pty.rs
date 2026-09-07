@@ -1,7 +1,3 @@
-//! Pseudo-terminal wrapper: spawns a child on a PTY, forwards keystrokes
-//! untouched, and passes the child's output through a `Filter` before it
-//! reaches the real terminal.
-
 use std::ffi::CString;
 use std::io;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
@@ -15,27 +11,10 @@ use nix::sys::termios::{self, SetArg, Termios};
 use nix::sys::wait::{WaitStatus, waitpid};
 use nix::unistd;
 
-/// Transforms the child's output stream before it is shown.
 pub trait Filter {
-    /// Consume `input`, appending whatever may be emitted now to `out`.
     fn feed(&mut self, input: &[u8], out: &mut Vec<u8>);
-    /// Emit anything still held back.
     fn flush(&mut self, out: &mut Vec<u8>);
-    /// True when `flush` would emit something.
     fn pending(&self) -> bool;
-}
-
-/// Passes output through unchanged.
-pub struct Passthrough;
-
-impl Filter for Passthrough {
-    fn feed(&mut self, input: &[u8], out: &mut Vec<u8>) {
-        out.extend_from_slice(input);
-    }
-    fn flush(&mut self, _out: &mut Vec<u8>) {}
-    fn pending(&self) -> bool {
-        false
-    }
 }
 
 static WINCH: AtomicBool = AtomicBool::new(false);
@@ -49,12 +28,10 @@ nix::ioctl_write_ptr_bad!(tiocswinsz, libc::TIOCSWINSZ, Winsize);
 
 fn current_winsize() -> Winsize {
     let mut ws = Winsize { ws_row: 24, ws_col: 80, ws_xpixel: 0, ws_ypixel: 0 };
-    // Safety: TIOCGWINSZ writes a Winsize into the pointer we pass.
     let _ = unsafe { tiocgwinsz(libc::STDOUT_FILENO, &mut ws) };
     ws
 }
 
-/// Puts stdin into raw mode and restores the original settings on drop.
 struct RawMode {
     saved: Termios,
 }
@@ -87,13 +64,10 @@ fn write_all<F: AsFd>(fd: &F, mut buf: &[u8]) -> nix::Result<()> {
     Ok(())
 }
 
-/// Spawns `argv` on a fresh PTY and shuttles bytes until it exits.
-/// Returns the child's exit code.
 pub fn run(argv: &[String], filter: &mut dyn Filter) -> Result<i32, Box<dyn std::error::Error>> {
     let ws = current_winsize();
     let term = termios::tcgetattr(io::stdin().as_fd()).ok();
 
-    // Safety: the child branch only calls async-signal-safe functions before exec.
     let (child, master) = match unsafe { forkpty(&ws, term.as_ref()) }? {
         ForkptyResult::Child => exec_child(argv),
         ForkptyResult::Parent { child, master } => (child, master),
@@ -102,7 +76,7 @@ pub fn run(argv: &[String], filter: &mut dyn Filter) -> Result<i32, Box<dyn std:
     let _raw = RawMode::enable();
     install_winch()?;
 
-    let code = shuttle(&master, filter);
+    let result = shuttle(&master, filter);
     drop(master);
 
     let status = loop {
@@ -113,7 +87,7 @@ pub fn run(argv: &[String], filter: &mut dyn Filter) -> Result<i32, Box<dyn std:
             Err(_) => break 1,
         }
     };
-    code?;
+    result?;
     Ok(status)
 }
 
@@ -122,25 +96,20 @@ fn exec_child(argv: &[String]) -> ! {
         .iter()
         .map(|a| CString::new(a.as_str()).unwrap_or_default())
         .collect();
-    // Safety: plain setenv before exec; single-threaded child.
     unsafe { libc::setenv(c"ANONTERM".as_ptr(), c"1".as_ptr(), 1) };
     let _ = unistd::execvp(&cargs[0], &cargs);
-    // Only reached if exec failed; avoid running parent destructors.
     unsafe { libc::_exit(127) }
 }
 
 fn install_winch() -> nix::Result<()> {
     let action = SigAction::new(SigHandler::Handler(on_winch), SaFlags::empty(), SigSet::empty());
-    // Safety: handler only touches an atomic.
     unsafe { sigaction(Signal::SIGWINCH, &action) }.map(|_| ())
 }
 
 fn resize(master: &OwnedFd) {
     let ws = current_winsize();
-    // Safety: TIOCSWINSZ reads a Winsize from the pointer we pass.
-    let _ = unsafe { tiocswinsz(master.as_fd().as_raw_fd(), &ws) };
+    let _ = unsafe { tiocswinsz(master.as_raw_fd(), &ws) };
 }
-
 
 fn shuttle(master: &OwnedFd, filter: &mut dyn Filter) -> nix::Result<()> {
     let stdin = io::stdin();

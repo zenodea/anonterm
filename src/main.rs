@@ -1,4 +1,7 @@
+mod pseudo;
 mod pty;
+mod rules;
+mod stream;
 
 use std::process;
 
@@ -21,7 +24,8 @@ fn main() {
         args.push(std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()));
     }
 
-    let mut filter = pty::Passthrough;
+    let rules = rules::RuleSet::new();
+    let mut filter = stream::Anonymizer::new(rules, pseudo::Pseudonymizer::from_env());
     match pty::run(&args, &mut filter) {
         Ok(code) => process::exit(code),
         Err(e) => {
