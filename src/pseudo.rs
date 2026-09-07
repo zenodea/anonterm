@@ -24,22 +24,33 @@ const CONSONANTS: &[u8] = b"bdfgklmnprstvz";
 const HEX: &[u8] = b"abcdef";
 const ALNUM: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Style {
+    Pseudonym,
+    Mask(char),
+}
+
 pub struct Pseudonymizer {
     seed: u64,
+    style: Style,
     cache: HashMap<String, String>,
 }
 
 impl Pseudonymizer {
     pub fn new(seed: u64) -> Self {
-        Self { seed, cache: HashMap::new() }
+        Self::with_style(seed, Style::Pseudonym)
     }
 
-    pub fn from_env() -> Self {
+    pub fn with_style(seed: u64, style: Style) -> Self {
+        Self { seed, style, cache: HashMap::new() }
+    }
+
+    pub fn from_env(style: Style) -> Self {
         let seed = std::env::var("ANONTERM_SEED")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or_else(random_seed);
-        Self::new(seed)
+        Self::with_style(seed, style)
     }
 
     pub fn replace(&mut self, original: &str, kind: Kind) -> String {
@@ -52,6 +63,9 @@ impl Pseudonymizer {
     }
 
     fn generate(&self, original: &str, kind: Kind) -> String {
+        if let Style::Mask(c) = self.style {
+            return original.chars().map(|_| c).collect();
+        }
         let mut rng = fnv1a(self.seed, original);
         let mut out = String::with_capacity(original.len());
         let mut want_vowel = splitmix(&mut rng) & 1 == 0;
@@ -110,6 +124,13 @@ mod tests {
         let mut c = Pseudonymizer::new(8);
         assert_eq!(a.replace("somebody", Kind::Word), b.replace("somebody", Kind::Word));
         assert_ne!(a.replace("somebody", Kind::Word), c.replace("somebody", Kind::Word));
+    }
+
+    #[test]
+    fn mask_style_uses_one_char() {
+        let mut p = Pseudonymizer::with_style(1, Style::Mask('*'));
+        assert_eq!(p.replace("Some.Body@example.org", Kind::Word), "*********************");
+        assert_eq!(p.replace("üx", Kind::Hex), "**");
     }
 
     #[test]

@@ -8,6 +8,7 @@ pub struct Config {
     pub literals: Vec<String>,
     pub patterns: Vec<String>,
     pub builtin: Option<bool>,
+    pub mask: Option<String>,
 }
 
 pub fn default_path() -> Option<PathBuf> {
@@ -40,16 +41,18 @@ mod tests {
     #[test]
     fn parses_all_fields() {
         let c: Config = toml::from_str(
-            r#"
+            r##"
             literals = ["acme", "project-x"]
             patterns = ['\bPROJ-\d+\b']
             builtin = false
-            "#,
+            mask = "#"
+            "##,
         )
         .unwrap();
         assert_eq!(c.literals, vec!["acme", "project-x"]);
         assert_eq!(c.patterns, vec![r"\bPROJ-\d+\b"]);
         assert_eq!(c.builtin, Some(false));
+        assert_eq!(c.mask.as_deref(), Some("#"));
     }
 
     #[test]

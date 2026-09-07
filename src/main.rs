@@ -18,10 +18,11 @@ terminal. Keystrokes are forwarded untouched.
   -l, --literal WORD  also mask WORD (repeatable)
   -p, --pattern RE    also mask matches of regex RE (repeatable)
       --no-builtin    skip environment-derived literals and builtin patterns
+  -m, --mask[=CHAR]   replace matches with CHAR (default *) instead of pseudonyms
       --list          print the literals and patterns in effect and exit
   -h, --help          show this help
 
-Config file keys: literals = [...], patterns = [...], builtin = true|false.
+Config file keys: literals, patterns, builtin = true|false, mask = \"*\".
 Set ANONTERM_SEED to make replacements reproducible across runs.";
 
 struct Options {
@@ -29,6 +30,7 @@ struct Options {
     literals: Vec<String>,
     patterns: Vec<String>,
     builtin: bool,
+    mask: Option<char>,
     list: bool,
     command: Vec<String>,
 }
@@ -39,6 +41,7 @@ fn parse_args() -> Result<Options, String> {
         literals: Vec::new(),
         patterns: Vec::new(),
         builtin: true,
+        mask: None,
         list: false,
         command: Vec::new(),
     };
@@ -54,6 +57,8 @@ fn parse_args() -> Result<Options, String> {
             "-l" | "--literal" => opts.literals.push(value(&a)?),
             "-p" | "--pattern" => opts.patterns.push(value(&a)?),
             "--no-builtin" => opts.builtin = false,
+            "-m" | "--mask" => opts.mask = Some('*'),
+            s if s.starts_with("--mask=") => opts.mask = Some(single_char(&s[7..])?),
             "--list" => opts.list = true,
             "--" => {
                 opts.command = args.collect();
@@ -69,6 +74,14 @@ fn parse_args() -> Result<Options, String> {
     Ok(opts)
 }
 
+fn single_char(s: &str) -> Result<char, String> {
+    let mut it = s.chars();
+    match (it.next(), it.next()) {
+        (Some(c), None) => Ok(c),
+        _ => Err(format!("mask must be a single character, got {s:?}")),
+    }
+}
+
 fn fail(msg: impl std::fmt::Display, code: i32) -> ! {
     eprintln!("anonterm: {msg}");
     process::exit(code)
@@ -78,6 +91,10 @@ fn main() {
     let mut opts = parse_args().unwrap_or_else(|e| fail(format!("{e}\n\n{USAGE}"), 2));
     let cfg = config::load(opts.config.as_deref()).unwrap_or_else(|e| fail(e, 2));
     let builtin = opts.builtin && cfg.builtin.unwrap_or(true);
+    let style = match opts.mask.or_else(|| cfg.mask.as_deref().and_then(|m| single_char(m).ok())) {
+        Some(c) => pseudo::Style::Mask(c),
+        None => pseudo::Style::Pseudonym,
+    };
 
     let mut literals = if builtin { identity::from_environment() } else { Vec::new() };
     literals.extend(cfg.literals);
@@ -110,7 +127,7 @@ fn main() {
         opts.command.push(std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()));
     }
 
-    let mut filter = stream::Anonymizer::new(rules, pseudo::Pseudonymizer::from_env());
+    let mut filter = stream::Anonymizer::new(rules, pseudo::Pseudonymizer::from_env(style));
     match pty::run(&opts.command, &mut filter) {
         Ok(code) => process::exit(code),
         Err(e) => fail(e, 1),

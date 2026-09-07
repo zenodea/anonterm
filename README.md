@@ -49,6 +49,10 @@ builtin = true
 Flags `-l WORD` and `-p REGEX` add to the config, `--no-builtin` disables
 the environment-derived and builtin rules.
 
+To blank matches out instead of inventing names, pass `-m` (or `--mask`)
+for `*`, `--mask=#` for another character, or set `mask = "*"` in the
+config. The character count is still preserved.
+
 ## Limitations
 
 The filter works on the output byte stream, not on the rendered screen.
